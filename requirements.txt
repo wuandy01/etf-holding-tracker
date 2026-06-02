@@ -3,3 +3,5 @@ requests
 beautifulsoup4
 pandas
 urllib3
+gspread
+google-auth
