@@ -16,10 +16,12 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ==========================================
 MY_ETF_LIST = [
     "0050.TW", 
-    "0056.TW", 
+    "00980A.TW", 
     "00878.TW", 
-    "00919.TW", 
-    "00929.TW"
+    "00981A.TW", 
+    "00982A.TW",
+    "00992A.TW",
+    "00991A.TW"
 ]
 
 # ⚠️名字與Google雲端硬碟建立的試算表名稱一致
