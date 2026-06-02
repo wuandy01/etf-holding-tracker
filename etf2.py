@@ -133,28 +133,42 @@ with st.sidebar:
     st.markdown("一鍵抓取並覆蓋清單內所有 ETF 至 Google 試算表。")
     st.write("目前追蹤清單：")
     st.code(", ".join(MY_ETF_LIST))
+
+    st.divider()
+
+    admin_pw = st.text_input("管理員密碼", type="password")
+
+    if admin_pw == "andyetf888":
     
-    if st.button("🚀 雲端一鍵更新所有 ETF", type="primary"):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        total_etf = len(MY_ETF_LIST)
-        success_count = 0
-        
-        for i, etf in enumerate(MY_ETF_LIST):
-            status_text.text(f"正在抓取 {etf} ({i+1}/{total_etf})...")
-            fetch_etf_holdings.clear() 
-            df_temp = fetch_etf_holdings(etf)
+        if st.button("🚀 雲端一鍵更新所有 ETF", type="primary"):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
             
-            if df_temp is not None and not df_temp.empty:
-                save_history_to_gsheets(etf, df_temp)
-                success_count += 1
+            total_etf = len(MY_ETF_LIST)
+            success_count = 0
             
-            progress_bar.progress((i + 1) / total_etf)
-            if i < total_etf - 1:
-                time.sleep(3)
+            for i, etf in enumerate(MY_ETF_LIST):
+                status_text.text(f"正在抓取 {etf} ({i+1}/{total_etf})...")
+                fetch_etf_holdings.clear() 
+                df_temp = fetch_etf_holdings(etf)
                 
-        status_text.success(f"🎉 雲端更新完成！成功覆蓋 {success_count} 檔 ETF 紀錄。")
+                if df_temp is not None and not df_temp.empty:
+                    save_history_to_gsheets(etf, df_temp)
+                    success_count += 1
+                
+                progress_bar.progress((i + 1) / total_etf)
+                if i < total_etf - 1:
+                    time.sleep(3)
+            status_text.success(f"🎉 雲端更新完成！成功覆蓋 {success_count} 檔 ETF 紀錄。")
+            
+    else:
+        # 密碼不對時，顯示提示，不顯示按鈕
+        if admin_pw != "":
+            st.error("密碼錯誤，無權限更新。")
+        else:
+            st.info("請輸入密碼解鎖更新按鈕。")
+                    
+        
 
 # -- 主畫面：單檔查詢 --
 st.title("📈 台股 ETF 每日持股變化追蹤")
