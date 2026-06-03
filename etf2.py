@@ -135,8 +135,14 @@ def get_today_price_change(stock_names):
         return {}
         
     try:
-        # ⚠️ 關鍵修正：加入 threads=False 避免 Streamlit 雲端阻擋與卡死
-        df_yf = yf.download(valid_tickers, period="5d", progress=False, threads=False)
+        # ⚠️ 關鍵修正：建立偽裝 Session，防止 Yahoo Finance 阻擋雲端 IP
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        })
+        
+        # 將 session 傳入 yf.download 中
+        df_yf = yf.download(valid_tickers, period="5d", progress=False, threads=False, session=session)
         
         if df_yf.empty:
             return {}
@@ -152,9 +158,10 @@ def get_today_price_change(stock_names):
                     if len(s) >= 2:
                         change_map[ticker] = (s.iloc[-1] - s.iloc[-2]) / s.iloc[-2] * 100
         else:
-            s = df_yf['Close'].dropna()
-            if len(s) >= 2:
-                change_map[valid_tickers[0]] = (s.iloc[-1] - s.iloc[-2]) / s.iloc[-2] * 100
+            if 'Close' in df_yf.columns:
+                s = df_yf['Close'].dropna()
+                if len(s) >= 2:
+                    change_map[valid_tickers[0]] = (s.iloc[-1] - s.iloc[-2]) / s.iloc[-2] * 100
                 
         result_dict = {}
         for name in stock_names:
