@@ -124,52 +124,55 @@ def fetch_etf_holdings(etf_id):
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_today_price_change(stock_names):
-    tickers = []
+    # 1. 萃取股票代號，並同時準備上市(.TW)與上櫃(.TWO)兩種格式
+    tickers_tw = []
+    tickers_two = []
     for name in stock_names:
         match = re.search(r'\((.*?)\)', str(name))
         if match:
-            tickers.append(match.group(1))
+            # 去除原始的 .TW 尾巴，只留數字代號
+            base_sym = match.group(1).replace('.TW', '').replace('.TWO', '')
+            tickers_tw.append(f"{base_sym}.TW")
+            tickers_two.append(f"{base_sym}.TWO")
             
-    valid_tickers = list(set(tickers))
-    if not valid_tickers:
+    all_symbols = tickers_tw + tickers_two
+    if not all_symbols:
         return {}
         
+    # 2. 透過 Yahoo 報價 API 批量抓取 (速度最快、不被雲端阻擋)
     change_map = {}
-    
-    # 建立偽裝，避免雲端 IP 被阻擋
-    session = requests.Session()
-    session.headers.update({
+    headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    })
+    }
     
-    # 放棄容易失敗的大量下載，改為逐筆抓取，最穩定！
-    for original_ticker in valid_tickers:
+    # 每次最多查詢 50 檔，避免網址過長
+    chunk_size = 50
+    for i in range(0, len(all_symbols), chunk_size):
+        chunk = all_symbols[i:i+chunk_size]
+        url = f"https://query2.finance.yahoo.com/v7/finance/quote?symbols={','.join(chunk)}"
+        
         try:
-            # 第一階段：先當作「上市股票 (.TW)」去抓
-            stock = yf.Ticker(original_ticker, session=session)
-            hist = stock.history(period="5d")
-            
-            # 第二階段：如果抓不到資料，且結尾是 .TW，自動切換成「上櫃股票 (.TWO)」再試一次
-            if hist.empty and original_ticker.endswith(".TW"):
-                two_ticker = original_ticker.replace(".TW", ".TWO")
-                stock = yf.Ticker(two_ticker, session=session)
-                hist = stock.history(period="5d")
-            
-            # 計算漲跌幅
-            if not hist.empty and len(hist) >= 2:
-                last_close = hist['Close'].iloc[-1]
-                prev_close = hist['Close'].iloc[-2]
-                change_map[original_ticker] = (last_close - prev_close) / prev_close * 100
-            else:
-                change_map[original_ticker] = 0.0
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get("quoteResponse", {}).get("result", [])
+                for item in results:
+                    symbol = item.get("symbol")
+                    # 直接抓取 API 算好的漲跌幅百分比
+                    change_percent = item.get("regularMarketChangePercent", 0.0)
+                    change_map[symbol] = change_percent
         except Exception:
-            change_map[original_ticker] = 0.0
+            continue
             
+    # 3. 對應回原本的中文名稱
     result_dict = {}
     for name in stock_names:
         match = re.search(r'\((.*?)\)', str(name))
-        if match and match.group(1) in change_map:
-            result_dict[name] = change_map[match.group(1)]
+        if match:
+            base_sym = match.group(1).replace('.TW', '').replace('.TWO', '')
+            # 優先抓 .TW 的資料，沒有的話再看 .TWO 有沒有資料
+            val = change_map.get(f"{base_sym}.TW", change_map.get(f"{base_sym}.TWO", 0.0))
+            result_dict[name] = val
         else:
             result_dict[name] = 0.0
             
