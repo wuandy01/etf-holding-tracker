@@ -7,6 +7,7 @@ import urllib3
 import gspread
 from google.oauth2.service_account import Credentials
 import json
+import re
 
 # 關閉verify產生的安全警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
