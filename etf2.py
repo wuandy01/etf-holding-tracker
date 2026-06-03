@@ -174,9 +174,7 @@ def get_today_price_change(stock_names):
             result_dict[name] = 0.0
             
     return result_dict
-    except Exception as e:
-        return {}
-
+    
 def compare_holdings(df_current, df_previous):
     df_current['標的'] = df_current['標的'].astype(str).str.strip()
     df_previous['標的'] = df_previous['標的'].astype(str).str.strip()
