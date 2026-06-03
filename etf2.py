@@ -106,6 +106,55 @@ def fetch_etf_holdings(etf_id):
 # ==========================================
 # 3. 比較增減函數
 # ==========================================
+@st.cache_data(ttl=3600)
+def get_today_price_change(stock_names):
+    tickers = []
+    # 利用正則表達式從 "台積電(2330.TW)" 中萃取出 "2330.TW"
+    for name in stock_names:
+        match = re.search(r'\((.*?)\)', str(name))
+        if match:
+            tickers.append(match.group(1))
+            
+    valid_tickers = list(set(tickers))
+    if not valid_tickers:
+        return {}
+        
+    try:
+        # 一次性批量下載近5日資料，避免遇到假日或沒開盤
+        df_yf = yf.download(valid_tickers, period="5d", progress=False)
+        if 'Close' not in df_yf:
+            return {}
+            
+        close_data = df_yf['Close']
+        change_map = {}
+        
+        # 處理資料格式並計算漲跌幅： (今日收盤 - 昨日收盤) / 昨日收盤 * 100
+        if isinstance(close_data, pd.Series):
+            s = close_data.dropna()
+            if len(s) >= 2:
+                change_map[valid_tickers[0]] = (s.iloc[-1] - s.iloc[-2]) / s.iloc[-2] * 100
+        else:
+            for ticker in valid_tickers:
+                try:
+                    s = close_data[ticker].dropna()
+                    if len(s) >= 2:
+                        change_map[ticker] = (s.iloc[-1] - s.iloc[-2]) / s.iloc[-2] * 100
+                except:
+                    pass
+                    
+        # 將漲跌幅對應回原本包含中文的標的名稱
+        result_dict = {}
+        for name in stock_names:
+            match = re.search(r'\((.*?)\)', str(name))
+            if match and match.group(1) in change_map:
+                result_dict[name] = change_map[match.group(1)]
+            else:
+                result_dict[name] = 0.0
+                
+        return result_dict
+    except Exception:
+        return {}
+
 def compare_holdings(df_current, df_previous):
     # 強制轉換格式，避免 Google Sheets 讀取時數字變文字
     df_current['比例(%)'] = pd.to_numeric(df_current['比例(%)'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
@@ -119,10 +168,15 @@ def compare_holdings(df_current, df_previous):
     df_merge['比例增減(%)'] = (df_merge['比例(%)_今'] - df_merge['比例(%)_昨']).round(4)
     df_merge['股數增減'] = (df_merge['股數_今'] - df_merge['股數_昨']).astype(int)
     
-    df_result = df_merge[['標的', '比例(%)_今', '比例增減(%)', '股數_今', '股數增減']]
-    df_result.columns = ['標的', '今日比例(%)', '比例增減(%)', '今日股數', '股數增減']
-
+    stock_names = df_merge['標的'].tolist()
+    changes_dict = get_today_price_change(stock_names)
+    df_merge['今日漲跌幅(%)'] = df_merge['標的'].map(changes_dict).fillna(0.0)
+    
+    # 重新整理欄位順序 (將漲跌幅插在最前面)
+    df_result = df_merge[['標的', '今日漲跌幅(%)', '比例(%)_今', '比例增減(%)', '股數_今', '股數增減']]
+    df_result.columns = ['標的', '今日漲跌幅(%)', '今日比例(%)', '比例增減(%)', '今日股數', '股數增減']
     df_result['今日股數'] = df_result['今日股數'].astype(int)
+    
     return df_result
 
 # ==========================================
@@ -130,9 +184,9 @@ def compare_holdings(df_current, df_previous):
 # ==========================================
 st.set_page_config(page_title="ETF 持股變化追蹤", layout="wide")
 
-# -- 側邊欄：批次更新 --
+# -- 側邊欄：List更新 --
 with st.sidebar:
-    st.header("⚙️ 雲端批次管理區")
+    st.header("⚙️ ETF List管理區")
     st.markdown("一鍵抓取並覆蓋清單內所有 ETF 至 Google 試算表。")
     st.write("目前追蹤清單：")
     st.code(", ".join(MY_ETF_LIST))
@@ -211,7 +265,8 @@ if st.session_state.df_current is not None:
     df_yesterday = get_history_from_gsheets(current_etf)
     
     if df_yesterday is not None and not df_yesterday.empty:
-        st.subheader(f"{current_etf} - 持股變化比較")
+        etf_full_name = ETF_NAME_MAP.get(current_etf, current_etf)
+        st.subheader(f"{etf_full_name} - 持股變化比較")
         df_comparison = compare_holdings(df_today, df_yesterday)
         df_comparison = df_comparison.sort_values(by="比例增減(%)", ascending=False).reset_index(drop=True)
         
