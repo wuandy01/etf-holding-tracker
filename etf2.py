@@ -30,11 +30,11 @@ MY_ETF_LIST = [
 ETF_NAME_MAP = {
     "0050.TW": "0050 元大台灣50",
     "0056.TW": "0056 元大高股息",
-    "00980A.TW": "00980A 野村臺灣優選-主動",
-    "00981A.TW": "00981A 統一台股增長-主動",
-    "00982A.TW": "00982A 群益台灣精選-主動",
-    "00991A.TW": "00991A 復華台灣未來50-主動",
-    "00992A.TW": "00992A 群益台灣科技創新-主動",
+    "00980A.TW": "00980A 野村臺灣優選(主動)",
+    "00981A.TW": "00981A 統一台股增長(主動)",
+    "00982A.TW": "00982A 群益台灣精選(主動)",
+    "00991A.TW": "00991A 復華台灣未來50(主動)",
+    "00992A.TW": "00992A 群益台灣科技創新(主動)",
     "00878.TW": "00878 國泰永續高股息",
     "00919.TW": "00919 群益台灣精選高息",
     "00929.TW": "00929 復華台灣科技優息"
@@ -125,7 +125,6 @@ def fetch_etf_holdings(etf_id):
 @st.cache_data(ttl=3600)
 def get_today_price_change(stock_names):
     tickers = []
-    # 利用正則表達式從 "台積電(2330.TW)" 中萃取出 "2330.TW"
     for name in stock_names:
         match = re.search(r'\((.*?)\)', str(name))
         if match:
@@ -136,29 +135,27 @@ def get_today_price_change(stock_names):
         return {}
         
     try:
-        # 一次性批量下載近5日資料，避免遇到假日或沒開盤
-        df_yf = yf.download(valid_tickers, period="5d", progress=False)
-        if 'Close' not in df_yf:
+        # ⚠️ 關鍵修正：加入 threads=False 避免 Streamlit 雲端阻擋與卡死
+        df_yf = yf.download(valid_tickers, period="5d", progress=False, threads=False)
+        
+        if df_yf.empty:
             return {}
             
-        close_data = df_yf['Close']
         change_map = {}
         
-        # 處理資料格式並計算漲跌幅： (今日收盤 - 昨日收盤) / 昨日收盤 * 100
-        if isinstance(close_data, pd.Series):
-            s = close_data.dropna()
-            if len(s) >= 2:
-                change_map[valid_tickers[0]] = (s.iloc[-1] - s.iloc[-2]) / s.iloc[-2] * 100
-        else:
+        # 處理 yfinance 可能回傳的多重索引 (MultiIndex) 結構
+        if isinstance(df_yf.columns, pd.MultiIndex):
+            close_df = df_yf['Close']
             for ticker in valid_tickers:
-                try:
-                    s = close_data[ticker].dropna()
+                if ticker in close_df.columns:
+                    s = close_df[ticker].dropna()
                     if len(s) >= 2:
                         change_map[ticker] = (s.iloc[-1] - s.iloc[-2]) / s.iloc[-2] * 100
-                except:
-                    pass
-                    
-        # 將漲跌幅對應回原本包含中文的標的名稱
+        else:
+            s = df_yf['Close'].dropna()
+            if len(s) >= 2:
+                change_map[valid_tickers[0]] = (s.iloc[-1] - s.iloc[-2]) / s.iloc[-2] * 100
+                
         result_dict = {}
         for name in stock_names:
             match = re.search(r'\((.*?)\)', str(name))
@@ -168,13 +165,16 @@ def get_today_price_change(stock_names):
                 result_dict[name] = 0.0
                 
         return result_dict
-    except Exception:
+    except Exception as e:
         return {}
 
 def compare_holdings(df_current, df_previous):
-    # 強制轉換格式，避免 Google Sheets 讀取時數字變文字
+    df_current['標的'] = df_current['標的'].astype(str).str.strip()
+    df_previous['標的'] = df_previous['標的'].astype(str).str.strip()
+
     df_current['比例(%)'] = pd.to_numeric(df_current['比例(%)'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     df_previous['比例(%)'] = pd.to_numeric(df_previous['比例(%)'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    
     df_current['股數'] = pd.to_numeric(df_current['股數'].astype(str).str.replace(',', ''), errors='coerce').fillna(0).astype(int)
     df_previous['股數'] = pd.to_numeric(df_previous['股數'].astype(str).str.replace(',', ''), errors='coerce').fillna(0).astype(int)
     
@@ -184,17 +184,19 @@ def compare_holdings(df_current, df_previous):
     df_merge['比例增減(%)'] = (df_merge['比例(%)_今'] - df_merge['比例(%)_昨']).round(4)
     df_merge['股數增減'] = (df_merge['股數_今'] - df_merge['股數_昨']).astype(int)
     
+    # 呼叫函數取得漲跌幅
     stock_names = df_merge['標的'].tolist()
     changes_dict = get_today_price_change(stock_names)
-    df_merge['今日漲跌幅(%)'] = df_merge['標的'].map(changes_dict).fillna(0.0)
     
-    # 重新整理欄位順序 (將漲跌幅插在最前面)
+    # ⚠️ 關鍵修正：強制轉型為 float，避免空值變成無法格式化的字串
+    df_merge['今日漲跌幅(%)'] = df_merge['標的'].map(changes_dict).fillna(0.0).astype(float)
+    
     df_result = df_merge[['標的', '今日漲跌幅(%)', '比例(%)_今', '比例增減(%)', '股數_今', '股數增減']]
     df_result.columns = ['標的', '今日漲跌幅(%)', '今日比例(%)', '比例增減(%)', '今日股數', '股數增減']
     df_result['今日股數'] = df_result['今日股數'].astype(int)
     
     return df_result
-
+    
 # ==========================================
 # 4. Streamlit 介面與邏輯
 # ==========================================
@@ -287,20 +289,29 @@ if st.session_state.df_current is not None:
         df_comparison = df_comparison.sort_values(by="比例增減(%)", ascending=False).reset_index(drop=True)
         
         def color_change(val):
-            if val > 0:
-                return 'color: red'
-            elif val < 0:
-                return 'color: green'
+            try:
+                # 確保能轉為數字判斷
+                val_float = float(val)
+                if val_float > 0:
+                    return 'color: red'
+                elif val_float < 0:
+                    return 'color: green'
+            except:
+                pass
             return 'color: gray'
             
+        # 套用顏色並強制顯示正負號格式
         styled_df = df_comparison.style\
-        .map(color_change, subset=['比例增減(%)', '股數增減'])\
-        .format({
+            .map(color_change, subset=['今日漲跌幅(%)', '比例增減(%)', '股數增減'])\
+            .format({
+                # ⚠️ 關鍵修正：使用 lambda 強制處理小數點與正負號
+                "今日漲跌幅(%)": lambda x: f"{x:+.2f}" if pd.notna(x) else "+0.00",
                 "今日比例(%)": "{:.4f}",
-                "比例增減(%)": "{:+.4f}",  # + 代表強制顯示正負號，.4f 代表小數點後四位
-                "今日股數": "{:,.0f}",    # , 代表千分位，.0f 代表沒有小數點
-                "股數增減": "{:+,.0f}"     # + 代表正負號，, 代表千分位，.0f 代表沒有小數點
+                "比例增減(%)": "{:+.4f}",
+                "今日股數": "{:,.0f}",
+                "股數增減": "{:+,.0f}"
             })
+        
         st.dataframe(styled_df, use_container_width=True, height=500)
         
     else:
