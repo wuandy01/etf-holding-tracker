@@ -108,10 +108,10 @@ def fetch_etf_holdings(etf_id):
 # ==========================================
 def compare_holdings(df_current, df_previous):
     # 強制轉換格式，避免 Google Sheets 讀取時數字變文字
-    df_current['比例(%)'] = pd.to_numeric(df_current['比例(%)'], errors='coerce').fillna(0)
-    df_previous['比例(%)'] = pd.to_numeric(df_previous['比例(%)'], errors='coerce').fillna(0)
-    df_current['股數'] = pd.to_numeric(df_current['股數'], errors='coerce').fillna(0)
-    df_previous['股數'] = pd.to_numeric(df_previous['股數'], errors='coerce').fillna(0)
+    df_current['比例(%)'] = pd.to_numeric(df_current['比例(%)'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    df_previous['比例(%)'] = pd.to_numeric(df_previous['比例(%)'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    df_current['股數'] = pd.to_numeric(df_current['股數'].astype(str).str.replace(',', ''), errors='coerce').fillna(0).astype(int)
+    df_previous['股數'] = pd.to_numeric(df_previous['股數'].astype(str).str.replace(',', ''), errors='coerce').fillna(0).astype(int)
     
     df_merge = pd.merge(df_current, df_previous, on="標的", how="outer", suffixes=('_今', '_昨'))
     df_merge = df_merge.fillna(0)
@@ -121,7 +121,8 @@ def compare_holdings(df_current, df_previous):
     
     df_result = df_merge[['標的', '比例(%)_今', '比例增減(%)', '股數_今', '股數增減']]
     df_result.columns = ['標的', '今日比例(%)', '比例增減(%)', '今日股數', '股數增減']
-    
+
+    df_result['今日股數'] = df_result['今日股數'].astype(int)
     return df_result
 
 # ==========================================
@@ -221,7 +222,14 @@ if st.session_state.df_current is not None:
                 return 'color: green'
             return 'color: gray'
             
-        styled_df = df_comparison.style.map(color_change, subset=['比例增減(%)', '股數增減'])
+        styled_df = df_comparison.style\
+        .map(color_change, subset=['比例增減(%)', '股數增減'])\
+        .format({
+                "今日比例(%)": "{:.4f}",
+                "比例增減(%)": "{:+.4f}",  # + 代表強制顯示正負號，.4f 代表小數點後四位
+                "今日股數": "{:,.0f}",    # , 代表千分位，.0f 代表沒有小數點
+                "股數增減": "{:+,.0f}"     # + 代表正負號，, 代表千分位，.0f 代表沒有小數點
+            })
         st.dataframe(styled_df, use_container_width=True, height=500)
         
     else:
