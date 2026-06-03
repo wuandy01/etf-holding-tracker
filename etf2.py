@@ -134,44 +134,46 @@ def get_today_price_change(stock_names):
     if not valid_tickers:
         return {}
         
-    try:
-        # ⚠️ 關鍵修正：建立偽裝 Session，防止 Yahoo Finance 阻擋雲端 IP
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        })
-        
-        # 將 session 傳入 yf.download 中
-        df_yf = yf.download(valid_tickers, period="5d", progress=False, threads=False, session=session)
-        
-        if df_yf.empty:
-            return {}
+    change_map = {}
+    
+    # 建立偽裝，避免雲端 IP 被阻擋
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    })
+    
+    # 放棄容易失敗的大量下載，改為逐筆抓取，最穩定！
+    for original_ticker in valid_tickers:
+        try:
+            # 第一階段：先當作「上市股票 (.TW)」去抓
+            stock = yf.Ticker(original_ticker, session=session)
+            hist = stock.history(period="5d")
             
-        change_map = {}
-        
-        # 處理 yfinance 可能回傳的多重索引 (MultiIndex) 結構
-        if isinstance(df_yf.columns, pd.MultiIndex):
-            close_df = df_yf['Close']
-            for ticker in valid_tickers:
-                if ticker in close_df.columns:
-                    s = close_df[ticker].dropna()
-                    if len(s) >= 2:
-                        change_map[ticker] = (s.iloc[-1] - s.iloc[-2]) / s.iloc[-2] * 100
-        else:
-            if 'Close' in df_yf.columns:
-                s = df_yf['Close'].dropna()
-                if len(s) >= 2:
-                    change_map[valid_tickers[0]] = (s.iloc[-1] - s.iloc[-2]) / s.iloc[-2] * 100
-                
-        result_dict = {}
-        for name in stock_names:
-            match = re.search(r'\((.*?)\)', str(name))
-            if match and match.group(1) in change_map:
-                result_dict[name] = change_map[match.group(1)]
+            # 第二階段：如果抓不到資料，且結尾是 .TW，自動切換成「上櫃股票 (.TWO)」再試一次
+            if hist.empty and original_ticker.endswith(".TW"):
+                two_ticker = original_ticker.replace(".TW", ".TWO")
+                stock = yf.Ticker(two_ticker, session=session)
+                hist = stock.history(period="5d")
+            
+            # 計算漲跌幅
+            if not hist.empty and len(hist) >= 2:
+                last_close = hist['Close'].iloc[-1]
+                prev_close = hist['Close'].iloc[-2]
+                change_map[original_ticker] = (last_close - prev_close) / prev_close * 100
             else:
-                result_dict[name] = 0.0
-                
-        return result_dict
+                change_map[original_ticker] = 0.0
+        except Exception:
+            change_map[original_ticker] = 0.0
+            
+    result_dict = {}
+    for name in stock_names:
+        match = re.search(r'\((.*?)\)', str(name))
+        if match and match.group(1) in change_map:
+            result_dict[name] = change_map[match.group(1)]
+        else:
+            result_dict[name] = 0.0
+            
+    return result_dict
     except Exception as e:
         return {}
 
