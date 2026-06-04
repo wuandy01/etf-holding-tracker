@@ -171,34 +171,30 @@ def get_today_price_change(stock_names):
     return result_dict
     
 def compare_holdings(df_current, df_previous):
-    # 確保兩邊的標的名稱都沒有多餘空白
     df_current['標的'] = df_current['標的'].astype(str).str.strip()
     df_previous['標的'] = df_previous['標的'].astype(str).str.strip()
 
-    # 將字串轉換為數值，如果原本有逗號也順便清掉，無法轉換的就補 0
     df_current['比例(%)'] = pd.to_numeric(df_current['比例(%)'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     df_previous['比例(%)'] = pd.to_numeric(df_previous['比例(%)'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     
-    # 股數強制轉為整數
     df_current['股數'] = pd.to_numeric(df_current['股數'].astype(str).str.replace(',', ''), errors='coerce').fillna(0).astype(int)
     df_previous['股數'] = pd.to_numeric(df_previous['股數'].astype(str).str.replace(',', ''), errors='coerce').fillna(0).astype(int)
     
-    # 合併新舊資料
     df_merge = pd.merge(df_current, df_previous, on="標的", how="outer", suffixes=('_今', '_昨'))
-    df_merge = df_merge.fillna(0)
     
-    # 計算增減
+    # ✅ 修正：只對數值欄填 0，不要動「標的」欄
+    num_cols = ['比例(%)_今', '比例(%)_昨', '股數_今', '股數_昨']
+    df_merge[num_cols] = df_merge[num_cols].fillna(0)
+    
     df_merge['比例增減(%)'] = (df_merge['比例(%)_今'] - df_merge['比例(%)_昨']).round(4)
     df_merge['股數增減'] = (df_merge['股數_今'] - df_merge['股數_昨']).astype(int)
     
-    # 呼叫函數取得漲跌幅 (使用剛才更新的 Yahoo API 輕量版)
     stock_names = df_merge['標的'].tolist()
     changes_dict = get_today_price_change(stock_names)
+    st.write(changes_dict)
     
-    # 強制轉型為 float，並將漲跌幅塞回 DataFrame
     df_merge['今日漲跌幅(%)'] = df_merge['標的'].map(changes_dict).fillna(0.0).astype(float)
     
-    # 整理最終輸出的欄位與順序
     df_result = df_merge[['標的', '今日漲跌幅(%)', '比例(%)_今', '比例增減(%)', '股數_今', '股數增減']]
     df_result.columns = ['標的', '今日漲跌幅(%)', '今日比例(%)', '比例增減(%)', '今日股數', '股數增減']
     df_result['今日股數'] = df_result['今日股數'].astype(int)
