@@ -85,7 +85,8 @@ def save_history_to_gsheets(etf_id, df):
     
     # ⚠️ 關鍵升級：讓 Python 自動把 Google Finance 陣列公式寫入 D1 欄位！
     # 這個公式會自動判定：先用 TPE(上市) 查，查不到自動切換 TWO(上櫃)
-    formula = r'={"今日漲跌幅(%)"; ARRAYFORMULA(IF(A2:A="", "", IFERROR(GOOGLEFINANCE("TPE:" & REGEXEXTRACT(A2:A, "\((\d+)\.TW\)"), "changepct"), IFERROR(GOOGLEFINANCE("TWO:" & REGEXEXTRACT(A2:A, "\((\d+)\.TW\)"), "changepct"), 0))))}'
+    # ⚠️ 關鍵升級：使用 [0-9]+ 最單純的正規表達式，防止括號在傳輸過程中被吃掉
+    formula = '={"今日漲跌幅(%)"; ARRAYFORMULA(IF(A2:A="", "", IFERROR(GOOGLEFINANCE("TPE:" & REGEXEXTRACT(A2:A, "[0-9]+"), "changepct"), IFERROR(GOOGLEFINANCE("TWO:" & REGEXEXTRACT(A2:A, "[0-9]+"), "changepct"), 0))))}'
     
     # 強制以「使用者輸入(USER_ENTERED)」模式寫入，確保 Google 試算表會把它當作公式執行
     worksheet.update(values=[[formula]], range_name="D1", value_input_option="USER_ENTERED")
