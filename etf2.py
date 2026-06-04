@@ -124,9 +124,8 @@ def fetch_etf_holdings(etf_id):
 # ==========================================
 @st.cache_data(ttl=1800)
 def get_today_price_change(stock_names):
-    """使用 FinMind API"""
+    """FinMind API - 免費版逐支查詢，盤後也有資料"""
     
-    # 從標的名稱抽出股票代碼（純數字部分）
     symbol_to_name = {}
     for name in stock_names:
         match = re.search(r'\((\d+)', str(name))
@@ -136,76 +135,58 @@ def get_today_price_change(stock_names):
     if not symbol_to_name:
         return {name: 0.0 for name in stock_names}
 
+    today = pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d")
+    # 往前 7 天保底，避免今天是假日沒資料
+    start_date = (pd.Timestamp.now(tz="Asia/Taipei") - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
+    
     change_map = {}
     
-    # 抓「今天」或「最近一個交易日」的日期
-    today = pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d")
-    
-    # FinMind API：一次抓所有代碼（批量查詢，只需 1 個 request）
-    # 用逗號分隔多個股票代碼
-    stock_ids = ",".join(symbol_to_name.keys())
-    
-    try:
-        url = "https://api.finmindtrade.com/api/v4/data"
-        params = {
-            "dataset": "TaiwanStockPrice",
-            "data_id": stock_ids,
-            "start_date": today,
-            # 如果今天是非交易日，往前抓 7 天保底
-            # （FinMind 只會回傳有交易的日期，自動過濾假日）
-        }
-        
-        # ⚠️ 如果你有 FinMind token，存在 Streamlit Secrets 並加入這行：
-        # token = st.secrets.get("finmind_token", "")
-        # if token:
-        #     params["token"] = token
-        
-        r = requests.get(url, params=params, timeout=15)
-        
-        if r.status_code == 200:
-            data = r.json().get("data", [])
+    # ⚠️ 免費版一次只能查一支，逐支迴圈
+    for code in symbol_to_name.keys():
+        try:
+            url = "https://api.finmindtrade.com/api/v4/data"
+            params = {
+                "dataset": "TaiwanStockPrice",
+                "data_id": code,          # ✅ 一次只放一支代碼
+                "start_date": start_date,  # 往前 7 天，確保非交易日也有資料
+            }
             
-            if not data:
-                # 今天沒資料（假日/非交易日），往前抓最近 7 天
-                start_fallback = (pd.Timestamp.now(tz="Asia/Taipei") - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
-                params["start_date"] = start_fallback
-                r = requests.get(url, params=params, timeout=15)
-                data = r.json().get("data", []) if r.status_code == 200 else []
+            # 如果有 token 就帶上（存在 Streamlit Secrets）
+            token = st.secrets.get("finmind_token", "")
+            if token:
+                params["token"] = token
             
-            # 只取每支股票最新一筆（date 最大的那天）
-            df_price = pd.DataFrame(data)
-            if not df_price.empty:
-                df_latest = df_price.sort_values("date").groupby("stock_id").last().reset_index()
+            r = requests.get(url, params=params, timeout=10)
+            
+            if r.status_code == 200:
+                data = r.json().get("data", [])
+                if data:
+                    # 取最新一筆（最後一個交易日）
+                    latest = sorted(data, key=lambda x: x["date"])[-1]
+                    spread = float(latest.get("spread", 0))
+                    close  = float(latest.get("close", 0))
+                    yesterday_close = close - spread
+                    pct = (spread / yesterday_close * 100) if yesterday_close != 0 else 0.0
+                    change_map[code] = round(pct, 2)
+                else:
+                    change_map[code] = 0.0
+            else:
+                change_map[code] = 0.0
                 
-                for _, row in df_latest.iterrows():
-                    code = str(row["stock_id"])
-                    try:
-                        # FinMind 的 spread 欄位 = 漲跌價差（元）
-                        spread = float(row.get("spread", 0))
-                        close  = float(row.get("close", 0))
-                        # 昨收 = 今收 - 漲跌差
-                        yesterday_close = close - spread
-                        pct = (spread / yesterday_close * 100) if yesterday_close != 0 else 0.0
-                        change_map[code] = round(pct, 2)
-                    except:
-                        change_map[code] = 0.0
-        else:
-            st.warning(f"FinMind API 回傳錯誤，狀態碼: {r.status_code}")
-            
-    except Exception as e:
-        st.warning(f"FinMind API 失敗: {e}")
+        except Exception:
+            change_map[code] = 0.0
+        
+        time.sleep(0.1)  # 避免打太快被限速（100ms 間隔）
 
-    # 對應回原本的中文名稱
+    # 對應回中文名稱
     result_dict = {}
     for name in stock_names:
         match = re.search(r'\((\d+)', str(name))
         if match:
-            code = match.group(1)
-            result_dict[name] = change_map.get(code, 0.0)
+            result_dict[name] = change_map.get(match.group(1), 0.0)
         else:
             result_dict[name] = 0.0
-    
-    # 非交易日無資料時給使用者提示
+
     if all(v == 0.0 for v in result_dict.values()):
         st.info("💡 今日為非交易日或資料尚未更新，漲跌幅顯示為 0。")
 
