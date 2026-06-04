@@ -124,50 +124,71 @@ def fetch_etf_holdings(etf_id):
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_today_price_change(stock_names):
-    # 同時準備上市(.TW)與上櫃(.TWO)兩種格式給 Yahoo 猜
-    tickers_tw = []
-    tickers_two = []
-    for name in stock_names:
-        match = re.search(r'\((.*?)\)', str(name))
-        if match:
-            base_sym = match.group(1).replace('.TW', '').replace('.TWO', '')
-            tickers_tw.append(f"{base_sym}.TW")
-            tickers_two.append(f"{base_sym}.TWO")
-            
-    all_symbols = tickers_tw + tickers_two
-    if not all_symbols:
-        return {}
-        
-    change_map = {}
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
+    """使用 TWSE + TPEX 官方 API 取得漲跌幅，完全不被雲端阻擋"""
     
-    # 透過 Yahoo 底層 API 批量抓取 (速度最快、不被雲端阻擋)
-    chunk_size = 50
-    for i in range(0, len(all_symbols), chunk_size):
-        chunk = all_symbols[i:i+chunk_size]
-        url = f"https://query2.finance.yahoo.com/v7/finance/quote?symbols={','.join(chunk)}"
+    # 先從標的名稱抽出代碼
+    symbol_to_name = {}
+    for name in stock_names:
+        match = re.search(r'\((\d+)', str(name))  # 只抓數字部分
+        if match:
+            symbol_to_name[match.group(1)] = name
+
+    if not symbol_to_name:
+        return {name: 0.0 for name in stock_names}
+
+    change_map = {}  # {代碼: 漲跌幅}
+
+    # --- 上市：TWSE ---
+    try:
+        twse_url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+        r = requests.get(twse_url, timeout=10)
+        if r.status_code == 200:
+            for item in r.json():
+                code = item.get("Code", "")
+                if code in symbol_to_name:
+                    try:
+                        # 漲跌價差 / 昨收 = 漲跌幅
+                        diff = float(item.get("Change", "0").replace("+", "").replace("X", "0"))
+                        close_str = item.get("ClosingPrice", "0").replace(",", "")
+                        yesterday = float(close_str) - diff
+                        pct = (diff / yesterday * 100) if yesterday != 0 else 0.0
+                        change_map[code] = round(pct, 2)
+                    except:
+                        change_map[code] = 0.0
+    except Exception as e:
+        st.warning(f"TWSE API 失敗: {e}")
+
+    # --- 上櫃：TPEX ---
+    missing = [c for c in symbol_to_name if c not in change_map]
+    if missing:
         try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                results = response.json().get("quoteResponse", {}).get("result", [])
-                for item in results:
-                    change_map[item.get("symbol")] = item.get("regularMarketChangePercent", 0.0)
-        except Exception:
-            continue
-            
+            tpex_url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
+            r = requests.get(tpex_url, timeout=10)
+            if r.status_code == 200:
+                for item in r.json():
+                    code = item.get("SecuritiesCompanyCode", "")
+                    if code in symbol_to_name:
+                        try:
+                            diff = float(item.get("Change", "0").replace("+", ""))
+                            close = float(item.get("Close", "0").replace(",", ""))
+                            yesterday = close - diff
+                            pct = (diff / yesterday * 100) if yesterday != 0 else 0.0
+                            change_map[code] = round(pct, 2)
+                        except:
+                            change_map[code] = 0.0
+        except Exception as e:
+            st.warning(f"TPEX API 失敗: {e}")
+
     # 對應回原本的中文名稱
     result_dict = {}
     for name in stock_names:
-        match = re.search(r'\((.*?)\)', str(name))
+        match = re.search(r'\((\d+)', str(name))
         if match:
-            base_sym = match.group(1).replace('.TW', '').replace('.TWO', '')
-            val = change_map.get(f"{base_sym}.TW", change_map.get(f"{base_sym}.TWO", 0.0))
-            result_dict[name] = val
+            code = match.group(1)
+            result_dict[name] = change_map.get(code, 0.0)
         else:
             result_dict[name] = 0.0
-            
+
     return result_dict
     
 def compare_holdings(df_current, df_previous):
@@ -191,7 +212,6 @@ def compare_holdings(df_current, df_previous):
     
     stock_names = df_merge['標的'].tolist()
     changes_dict = get_today_price_change(stock_names)
-    st.write(changes_dict)
     
     df_merge['今日漲跌幅(%)'] = df_merge['標的'].map(changes_dict).fillna(0.0).astype(float)
     
