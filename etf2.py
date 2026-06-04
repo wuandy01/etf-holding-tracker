@@ -78,18 +78,10 @@ def save_history_to_gsheets(etf_id, df):
         # 如果沒有該 ETF 的分頁，就自動建立一個
         worksheet = spreadsheet.add_worksheet(title=etf_id, rows="100", cols="10")
     
-    # 轉換為 list of lists 以便寫入 (這裡只有 標的、比例、股數 三欄，佔用 A, B, C 欄)
+    # 轉換為 list of lists 以便寫入
     df_clean = df.fillna("")
     data = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
     worksheet.update(values=data, range_name="A1")
-    
-    # ⚠️ 關鍵升級：讓 Python 自動把 Google Finance 陣列公式寫入 D1 欄位！
-    # 這個公式會自動判定：先用 TPE(上市) 查，查不到自動切換 TWO(上櫃)
-    # ⚠️ 關鍵升級：使用 [0-9]+ 最單純的正規表達式，防止括號在傳輸過程中被吃掉
-    formula = '={"今日漲跌幅(%)"; ARRAYFORMULA(IF(A2:A="", "", IFERROR(GOOGLEFINANCE("TPE:" & REGEXEXTRACT(A2:A, "[0-9]+"), "changepct"), IFERROR(GOOGLEFINANCE("TWO:" & REGEXEXTRACT(A2:A, "[0-9]+"), "changepct"), 0))))}'
-    
-    # 強制以「使用者輸入(USER_ENTERED)」模式寫入，確保 Google 試算表會把它當作公式執行
-    worksheet.update(values=[[formula]], range_name="D1", value_input_option="USER_ENTERED")
 
 # ==========================================
 # 2. 爬蟲函數
@@ -132,13 +124,12 @@ def fetch_etf_holdings(etf_id):
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_today_price_change(stock_names):
-    # 1. 萃取股票代號，並同時準備上市(.TW)與上櫃(.TWO)兩種格式
+    # 同時準備上市(.TW)與上櫃(.TWO)兩種格式給 Yahoo 猜
     tickers_tw = []
     tickers_two = []
     for name in stock_names:
         match = re.search(r'\((.*?)\)', str(name))
         if match:
-            # 去除原始的 .TW 尾巴，只留數字代號
             base_sym = match.group(1).replace('.TW', '').replace('.TWO', '')
             tickers_tw.append(f"{base_sym}.TW")
             tickers_two.append(f"{base_sym}.TWO")
@@ -147,38 +138,31 @@ def get_today_price_change(stock_names):
     if not all_symbols:
         return {}
         
-    # 2. 透過 Yahoo 報價 API 批量抓取 (速度最快、不被雲端阻擋)
     change_map = {}
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
-    # 每次最多查詢 50 檔，避免網址過長
+    # 透過 Yahoo 底層 API 批量抓取 (速度最快、不被雲端阻擋)
     chunk_size = 50
     for i in range(0, len(all_symbols), chunk_size):
         chunk = all_symbols[i:i+chunk_size]
         url = f"https://query2.finance.yahoo.com/v7/finance/quote?symbols={','.join(chunk)}"
-        
         try:
             response = requests.get(url, headers=headers, timeout=10)
             if response.status_code == 200:
-                data = response.json()
-                results = data.get("quoteResponse", {}).get("result", [])
+                results = response.json().get("quoteResponse", {}).get("result", [])
                 for item in results:
-                    symbol = item.get("symbol")
-                    # 直接抓取 API 算好的漲跌幅百分比
-                    change_percent = item.get("regularMarketChangePercent", 0.0)
-                    change_map[symbol] = change_percent
+                    change_map[item.get("symbol")] = item.get("regularMarketChangePercent", 0.0)
         except Exception:
             continue
             
-    # 3. 對應回原本的中文名稱
+    # 對應回原本的中文名稱
     result_dict = {}
     for name in stock_names:
         match = re.search(r'\((.*?)\)', str(name))
         if match:
             base_sym = match.group(1).replace('.TW', '').replace('.TWO', '')
-            # 優先抓 .TW 的資料，沒有的話再看 .TWO 有沒有資料
             val = change_map.get(f"{base_sym}.TW", change_map.get(f"{base_sym}.TWO", 0.0))
             result_dict[name] = val
         else:
@@ -187,28 +171,34 @@ def get_today_price_change(stock_names):
     return result_dict
     
 def compare_holdings(df_current, df_previous):
+    # 確保兩邊的標的名稱都沒有多餘空白
     df_current['標的'] = df_current['標的'].astype(str).str.strip()
     df_previous['標的'] = df_previous['標的'].astype(str).str.strip()
 
+    # 將字串轉換為數值，如果原本有逗號也順便清掉，無法轉換的就補 0
     df_current['比例(%)'] = pd.to_numeric(df_current['比例(%)'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     df_previous['比例(%)'] = pd.to_numeric(df_previous['比例(%)'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
     
+    # 股數強制轉為整數
     df_current['股數'] = pd.to_numeric(df_current['股數'].astype(str).str.replace(',', ''), errors='coerce').fillna(0).astype(int)
     df_previous['股數'] = pd.to_numeric(df_previous['股數'].astype(str).str.replace(',', ''), errors='coerce').fillna(0).astype(int)
     
+    # 合併新舊資料
     df_merge = pd.merge(df_current, df_previous, on="標的", how="outer", suffixes=('_今', '_昨'))
     df_merge = df_merge.fillna(0)
     
+    # 計算增減
     df_merge['比例增減(%)'] = (df_merge['比例(%)_今'] - df_merge['比例(%)_昨']).round(4)
     df_merge['股數增減'] = (df_merge['股數_今'] - df_merge['股數_昨']).astype(int)
     
-    # 呼叫函數取得漲跌幅
+    # 呼叫函數取得漲跌幅 (使用剛才更新的 Yahoo API 輕量版)
     stock_names = df_merge['標的'].tolist()
     changes_dict = get_today_price_change(stock_names)
     
-    # ⚠️ 關鍵修正：強制轉型為 float，避免空值變成無法格式化的字串
+    # 強制轉型為 float，並將漲跌幅塞回 DataFrame
     df_merge['今日漲跌幅(%)'] = df_merge['標的'].map(changes_dict).fillna(0.0).astype(float)
     
+    # 整理最終輸出的欄位與順序
     df_result = df_merge[['標的', '今日漲跌幅(%)', '比例(%)_今', '比例增減(%)', '股數_今', '股數增減']]
     df_result.columns = ['標的', '今日漲跌幅(%)', '今日比例(%)', '比例增減(%)', '今日股數', '股數增減']
     df_result['今日股數'] = df_result['今日股數'].astype(int)
