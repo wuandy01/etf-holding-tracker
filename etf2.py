@@ -78,10 +78,17 @@ def save_history_to_gsheets(etf_id, df):
         # 如果沒有該 ETF 的分頁，就自動建立一個
         worksheet = spreadsheet.add_worksheet(title=etf_id, rows="100", cols="10")
     
-    # 轉換為 list of lists 以便寫入
+    # 轉換為 list of lists 以便寫入 (這裡只有 標的、比例、股數 三欄，佔用 A, B, C 欄)
     df_clean = df.fillna("")
     data = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
     worksheet.update(values=data, range_name="A1")
+    
+    # ⚠️ 關鍵升級：讓 Python 自動把 Google Finance 陣列公式寫入 D1 欄位！
+    # 這個公式會自動判定：先用 TPE(上市) 查，查不到自動切換 TWO(上櫃)
+    formula = r'={"今日漲跌幅(%)"; ARRAYFORMULA(IF(A2:A="", "", IFERROR(GOOGLEFINANCE("TPE:" & REGEXEXTRACT(A2:A, "\((\d+)\.TW\)"), "changepct"), IFERROR(GOOGLEFINANCE("TWO:" & REGEXEXTRACT(A2:A, "\((\d+)\.TW\)"), "changepct"), 0))))}'
+    
+    # 強制以「使用者輸入(USER_ENTERED)」模式寫入，確保 Google 試算表會把它當作公式執行
+    worksheet.update(values=[[formula]], range_name="D1", value_input_option="USER_ENTERED")
 
 # ==========================================
 # 2. 爬蟲函數
