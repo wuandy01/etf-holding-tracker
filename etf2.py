@@ -122,62 +122,78 @@ def fetch_etf_holdings(etf_id):
 # ==========================================
 # 3. 比較增減函數
 # ==========================================
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800)
 def get_today_price_change(stock_names):
-    """使用 TWSE + TPEX 官方 API 取得漲跌幅，完全不被雲端阻擋"""
+    """使用 FinMind API"""
     
-    # 先從標的名稱抽出代碼
+    # 從標的名稱抽出股票代碼（純數字部分）
     symbol_to_name = {}
     for name in stock_names:
-        match = re.search(r'\((\d+)', str(name))  # 只抓數字部分
+        match = re.search(r'\((\d+)', str(name))
         if match:
             symbol_to_name[match.group(1)] = name
 
     if not symbol_to_name:
         return {name: 0.0 for name in stock_names}
 
-    change_map = {}  # {代碼: 漲跌幅}
-
-    # --- 上市：TWSE ---
+    change_map = {}
+    
+    # 抓「今天」或「最近一個交易日」的日期
+    today = pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d")
+    
+    # FinMind API：一次抓所有代碼（批量查詢，只需 1 個 request）
+    # 用逗號分隔多個股票代碼
+    stock_ids = ",".join(symbol_to_name.keys())
+    
     try:
-        twse_url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
-        r = requests.get(twse_url, timeout=10)
+        url = "https://api.finmindtrade.com/api/v4/data"
+        params = {
+            "dataset": "TaiwanStockPrice",
+            "data_id": stock_ids,
+            "start_date": today,
+            # 如果今天是非交易日，往前抓 7 天保底
+            # （FinMind 只會回傳有交易的日期，自動過濾假日）
+        }
+        
+        # ⚠️ 如果你有 FinMind token，存在 Streamlit Secrets 並加入這行：
+        # token = st.secrets.get("finmind_token", "")
+        # if token:
+        #     params["token"] = token
+        
+        r = requests.get(url, params=params, timeout=15)
+        
         if r.status_code == 200:
-            for item in r.json():
-                code = item.get("Code", "")
-                if code in symbol_to_name:
+            data = r.json().get("data", [])
+            
+            if not data:
+                # 今天沒資料（假日/非交易日），往前抓最近 7 天
+                start_fallback = (pd.Timestamp.now(tz="Asia/Taipei") - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
+                params["start_date"] = start_fallback
+                r = requests.get(url, params=params, timeout=15)
+                data = r.json().get("data", []) if r.status_code == 200 else []
+            
+            # 只取每支股票最新一筆（date 最大的那天）
+            df_price = pd.DataFrame(data)
+            if not df_price.empty:
+                df_latest = df_price.sort_values("date").groupby("stock_id").last().reset_index()
+                
+                for _, row in df_latest.iterrows():
+                    code = str(row["stock_id"])
                     try:
-                        # 漲跌價差 / 昨收 = 漲跌幅
-                        diff = float(item.get("Change", "0").replace("+", "").replace("X", "0"))
-                        close_str = item.get("ClosingPrice", "0").replace(",", "")
-                        yesterday = float(close_str) - diff
-                        pct = (diff / yesterday * 100) if yesterday != 0 else 0.0
+                        # FinMind 的 spread 欄位 = 漲跌價差（元）
+                        spread = float(row.get("spread", 0))
+                        close  = float(row.get("close", 0))
+                        # 昨收 = 今收 - 漲跌差
+                        yesterday_close = close - spread
+                        pct = (spread / yesterday_close * 100) if yesterday_close != 0 else 0.0
                         change_map[code] = round(pct, 2)
                     except:
                         change_map[code] = 0.0
+        else:
+            st.warning(f"FinMind API 回傳錯誤，狀態碼: {r.status_code}")
+            
     except Exception as e:
-        st.warning(f"TWSE API 失敗: {e}")
-
-    # --- 上櫃：TPEX ---
-    missing = [c for c in symbol_to_name if c not in change_map]
-    if missing:
-        try:
-            tpex_url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
-            r = requests.get(tpex_url, timeout=10)
-            if r.status_code == 200:
-                for item in r.json():
-                    code = item.get("SecuritiesCompanyCode", "")
-                    if code in symbol_to_name:
-                        try:
-                            diff = float(item.get("Change", "0").replace("+", ""))
-                            close = float(item.get("Close", "0").replace(",", ""))
-                            yesterday = close - diff
-                            pct = (diff / yesterday * 100) if yesterday != 0 else 0.0
-                            change_map[code] = round(pct, 2)
-                        except:
-                            change_map[code] = 0.0
-        except Exception as e:
-            st.warning(f"TPEX API 失敗: {e}")
+        st.warning(f"FinMind API 失敗: {e}")
 
     # 對應回原本的中文名稱
     result_dict = {}
@@ -188,6 +204,10 @@ def get_today_price_change(stock_names):
             result_dict[name] = change_map.get(code, 0.0)
         else:
             result_dict[name] = 0.0
+    
+    # 非交易日無資料時給使用者提示
+    if all(v == 0.0 for v in result_dict.values()):
+        st.info("💡 今日為非交易日或資料尚未更新，漲跌幅顯示為 0。")
 
     return result_dict
     
