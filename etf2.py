@@ -238,7 +238,7 @@ with st.sidebar:
 
     admin_pw = st.text_input("管理員密碼", type="password")
 
-    if admin_pw == "andyetf888":
+    if admin_pw == admin_password:
     
         if st.button("🚀 雲端一鍵更新所有 ETF", type="primary"):
             progress_bar = st.progress(0)
