@@ -15,7 +15,7 @@ Snapshots are written back on demand, so today's holdings become tomorrow's comp
 
 # Design notes
 
-Google Sheets as the datastore. Streamlit Community Cloud has an ephemeral filesystem — anything written locally disappears on redeploy or sleep/wake. Sheets gives free, persistent, inspectable storage, with one worksheet per ETF created automatically on first save.
+Google Sheets as the datastore to avoid data vanish from Streamlit's setting. Sheets gives free, persistent, inspectable storage, with one worksheet per ETF created automatically on first save.
 
 Red is up, green is down. This follows Taiwan and wider East Asian market convention, which is inverted relative to US platforms.
 
@@ -41,7 +41,7 @@ The Google service account needs the Sheets and Drive scopes, and the target spr
 
 # Limitations
 Only one snapshot is retained per ETF. Saving clears the worksheet and overwrites it, so the comparison is always "now versus the last save," not a true daily time series. Building a real history would mean appending dated rows instead of overwriting.
-The scraper depends on MoneyDJ's HTML structure (td.col05 / col06 / col07). Any markup change on their side breaks extraction silently rather than loudly.
+The scraper depends on MoneyDJ's HTML structure. Any markup change on their side breaks extraction silently.
 TLS verification is disabled on the scrape request, with urllib3 warnings suppressed. This works around a certificate issue on the source site but weakens transport security and should be revisited.
 Price lookups scale linearly with the number of holdings because of the free-tier single-symbol limit; a large ETF takes a noticeable amount of time to refresh.
 Holdings data is only as fresh as MoneyDJ's own update cycle, which lags the fund's actual trading.
