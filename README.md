@@ -12,6 +12,10 @@ Fetches each holding's price change for the day from the FinMind API
 Renders a sorted, colour-coded diff table
 
 Snapshots are written back on demand, so today's holdings become tomorrow's comparison baseline.
+<img width="1920" height="904" alt="image" src="https://github.com/user-attachments/assets/65e8f892-8895-4dce-8256-0c8aae2cf8a3" />
+<img width="1904" height="904" alt="image" src="https://github.com/user-attachments/assets/19097fdb-46b2-45b9-a314-8fc26870a450" />
+
+
 
 # Design notes
 
